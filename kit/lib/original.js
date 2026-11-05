@@ -35,6 +35,26 @@ async function isPng(blob) {
   return head.length === 8 && PNG_SIG.every((x, i) => head[i] === x);
 }
 
+// Only Shopify's own file addresses are fetched (security scan 5 Nov 26, issue 9): https://cdn.shopify.com/... or
+// https://<one of the shops' domains>/cdn/shop/... Any other address answers 'Not a file on Shopify.'
+const SHOP_HOSTS = ['www.chaoscreations.scot', 'chaoscreations.scot', 'poppegsofttees.com', 'www.poppegsofttees.com', 'www.unicornboots.com', 'unicornboots.com', 'uqp11w-ze.myshopify.com', 'fcmyjy-h5.myshopify.com', '2kn1t6-ze.myshopify.com'];
+export function isShopFileUrl(url) {
+  let u;
+  try {
+    u = new URL(String(url));
+  } catch (e) {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+  const host = u.hostname.toLowerCase();
+  if (host === 'cdn.shopify.com') return true;
+  return SHOP_HOSTS.includes(host) && u.pathname.startsWith('/cdn/shop/');
+}
+function onlyShopFile(r) {
+  if (!isShopFileUrl(r.url)) throw new Error('Not a file on Shopify.');
+  return r;
+}
+
 // where to fetch a value from, and what it's called: { url, name, png } (throws if it isn't an uploaded file)
 export function resolveOriginal(value, nameHint, ctx) {
   const v = String(value == null ? '' : value).trim();
@@ -44,18 +64,18 @@ export function resolveOriginal(value, nameHint, ctx) {
     // the shop's own CDN folder (cdn.shopify.com answers any page); else the shop's own address for its uploads
     const base = ctx ? cdnBase(ctx) : '';
     const url = base ? `${base}uploads/${encodeURIComponent(d.u)}` : `https://${d.host}/cdn/shop/uploads/${encodeURIComponent(d.u)}`;
-    return { url, name: d.n || d.u, png: d.png, upload: d.u };
+    return onlyShopFile({ url, name: d.n || d.u, png: d.png, upload: d.u });
   }
   let url = v;
   if (/^\/\//.test(url)) url = 'https:' + url;
-  if (!/^https?:\/\//i.test(url)) throw new Error('Not a file on Shopify.');
+  if (!/^https?:\/\//i.test(url) || !isShopFileUrl(url)) throw new Error('Not a file on Shopify.');
   if (ctx) seeUrl(ctx, url);
   const u = uploadName(url);
   const own = u || decodeURIComponent((url.split(/[?#]/)[0].split('/').pop() || '').trim());
   let name = nameHint ? String(nameHint) : own;
   // a hint without an extension gets the file's own
   if (nameHint && !extOf(name) && extOf(own)) name = `${name}.${extOf(own)}`;
-  return { url, name: name || own || 'download', png: false, upload: u };
+  return onlyShopFile({ url, name: name || own || 'download', png: false, upload: u });
 }
 
 // -> { blob, filename, type, url, size }
